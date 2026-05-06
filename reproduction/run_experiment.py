@@ -110,7 +110,7 @@ def get_models():
             verbosity=0,
         )
     if TABPFN_AVAILABLE:
-        models["TabPFN"] = TabPFNClassifier(device="cpu", N_ensemble_configurations=16)
+        models["TabPFN"] = TabPFNClassifier(device="cpu", n_estimators=16)
     return models
 
 # ---------------------------------------------------------------------------
@@ -121,8 +121,9 @@ def evaluate(X, y, models, dataset_name):
     skf = StratifiedKFold(n_splits=N_SPLITS, shuffle=True, random_state=RANDOM_STATE)
     results = []
 
-    for model_name, model in models.items():
+    for model_name, model in list(models.items()):
         accs, f1s, times = [], [], []
+        skip_model = False
         for fold, (train_idx, test_idx) in enumerate(skf.split(X, y), 1):
             X_train, X_test = X[train_idx], X[test_idx]
             y_train, y_test = y[train_idx], y[test_idx]
@@ -133,16 +134,24 @@ def evaluate(X, y, models, dataset_name):
                 X_train = scaler.fit_transform(X_train)
                 X_test = scaler.transform(X_test)
 
-            start = time.time()
-            model.fit(X_train, y_train)
-            preds = model.predict(X_test)
-            elapsed = time.time() - start
+            try:
+                start = time.time()
+                model.fit(X_train, y_train)
+                preds = model.predict(X_test)
+                elapsed = time.time() - start
+            except Exception as e:
+                print(f"  {model_name:25s}  SKIPPED — error: {e}")
+                skip_model = True
+                break
 
             acc = accuracy_score(y_test, preds)
             f1 = f1_score(y_test, preds, average="weighted")
             accs.append(acc)
             f1s.append(f1)
             times.append(elapsed)
+
+        if skip_model:
+            continue
 
         results.append({
             "dataset": dataset_name,
