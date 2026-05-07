@@ -17,7 +17,7 @@
 | 🎥 **YouTube Video** | [Watch on YouTube](https://youtu.be/93izObEFPtQ) |
 | 📄 **Slides PDF** | [`slides/short_story_slides.pdf`](slides/short_story_slides.pdf) |
 | 📄 **Slides PPTX** | [`slides/short_story_slides.pptx`](slides/short_story_slides.pptx) |
-| 🔬 **Reproduction Notebook** | [`reproduction/run_experiment_colab.ipynb`](reproduction/run_experiment_colab.ipynb) |
+| 🔬 **Reproduction Notebook** | [`https://colab.research.google.com/drive/1JX4fX-Rkbf0_BYvNXQoK28sShLvaZx6y?usp=sharing`](https://colab.research.google.com/drive/1JX4fX-Rkbf0_BYvNXQoK28sShLvaZx6y?usp=sharing) |
 | 📈 **Results CSV** | [`reproduction/results/metrics.csv`](reproduction/results/metrics.csv) |
 | 📝 **Paper Summary** | [`paper/paper_summary.md`](paper/paper_summary.md) |
 | 📝 **Article Draft** | [`article/medium_draft.md`](article/medium_draft.md) |
