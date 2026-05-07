@@ -206,7 +206,7 @@ To test the paper's core claim myself, I ran a small-scale reproduction experime
 - **Metrics:** Accuracy and weighted F1-score (mean ± std across folds).
 - **No hyperparameter tuning** for any model — all use default or near-default settings to test out-of-the-box performance, which is exactly the scenario where TabPFN claims to shine.
 
-The experiment code is available at [`reproduction/run_experiment.py`](https://github.com/ArshanBhanage/Deep-Learning---Short-Story/blob/main/reproduction/run_experiment.py).
+The experiment code is available as a Colab notebook at [`reproduction/run_experiment_colab.ipynb`](https://github.com/ArshanBhanage/Deep-Learning---Short-Story/blob/main/reproduction/run_experiment_colab.ipynb).
 
 ---
 
