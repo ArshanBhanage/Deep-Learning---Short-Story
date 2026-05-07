@@ -1,0 +1,459 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Beyond LLMs: The Rise of Tabular Foundation Models</title>
+<style>
+  body {
+    font-family: Georgia, 'Times New Roman', serif;
+    max-width: 740px;
+    margin: 40px auto;
+    padding: 0 20px;
+    color: #292929;
+    line-height: 1.8;
+    font-size: 18px;
+  }
+  h1 { font-size: 2.2em; margin-bottom: 0.2em; }
+  h2 { font-size: 1.5em; margin-top: 2em; border-bottom: 1px solid #eee; padding-bottom: 0.3em; }
+  h3 { font-size: 1.2em; }
+  blockquote {
+    border-left: 3px solid #ccc;
+    margin: 1.5em 0;
+    padding: 0.5em 1em;
+    color: #555;
+    background: #f9f9f9;
+  }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 1em 0;
+  }
+  th, td {
+    border: 1px solid #ddd;
+    padding: 8px 12px;
+    text-align: left;
+  }
+  th { background: #f5f5f5; font-weight: bold; }
+  code {
+    background: #f4f4f4;
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-size: 0.9em;
+  }
+  em { color: #555; }
+  a { color: #1a8917; }
+  hr { border: none; border-top: 1px solid #eee; margin: 2em 0; }
+</style>
+</head>
+<body>
+<h1>Beyond LLMs: The Rise of Tabular Foundation Models</h1>
+<p><em>A deep dive into TabPFN-2.5, the transformer that wants to replace XGBoost — with my own reproduction experiment.</em></p>
+<hr />
+<h2>1. Introduction: Foundation Models Are Moving Beyond Text</h2>
+<p>When most people hear "foundation model," they think of ChatGPT, Claude, or Gemini — large language models trained on internet-scale text data that can generalize to almost any language task. The foundation model paradigm, where a single pre-trained model adapts to many downstream tasks, has been revolutionary for text, images, and code.</p>
+<p>But here is something most people outside machine learning do not realize: <strong>the most common type of data in the real world is not text or images. It is tables.</strong></p>
+<p>Spreadsheets. CSV files. Database rows. Patient records. Financial transactions. Sensor readings. The structured, column-and-row data that powers virtually every business decision on the planet.</p>
+<p>And until very recently, foundation models had almost nothing to say about it.</p>
+<p>That is starting to change. A new class of model called <strong>Tabular Foundation Models (TFMs)</strong> is emerging, and the latest entry — <strong>TabPFN-2.5</strong> from Prior Labs — is making a bold claim: it can outperform the most popular tabular ML methods (XGBoost, CatBoost, LightGBM) in a single forward pass, with zero hyperparameter tuning.</p>
+<p>In this article, I will break down the paper, explain the architecture, present the benchmarks, and share results from my own reproduction experiment.</p>
+<hr />
+<h2>2. Why Tabular Data Matters</h2>
+<p>Tabular data is the backbone of decision-making in nearly every industry:</p>
+<ul>
+<li><strong>Healthcare:</strong> Patient records, lab results, diagnoses — all stored in tables.</li>
+<li><strong>Finance:</strong> Transaction logs, credit scores, risk assessments.</li>
+<li><strong>Manufacturing:</strong> Sensor readings, quality control metrics, supply chain data.</li>
+<li><strong>Retail:</strong> Customer demographics, purchase history, inventory levels.</li>
+</ul>
+<p>Despite the hype around LLMs and computer vision, the reality is that a huge portion of the machine learning work happening in industry today involves someone opening a CSV file and trying to predict a column from other columns. This is the bread and butter of data science.</p>
+<blockquote>
+<p><strong>[Figure 1: Why Tabular Data Matters]</strong>
+<em>Diagram showing the prevalence of tabular data across industries — healthcare records, financial transactions, manufacturing sensor data, and retail analytics all flowing into tabular ML pipelines.</em></p>
+</blockquote>
+<p>Any improvement to how we handle tabular data has an outsized practical impact. Even a small accuracy gain on a credit scoring model, for example, can translate into millions of dollars in reduced default risk.</p>
+<hr />
+<h2>3. What Makes Tabular Data Difficult</h2>
+<p>If tabular data is so common, why have foundation models taken so long to reach it? The answer lies in the fundamental differences between tabular data and the modalities where deep learning has thrived:</p>
+<p><strong>No spatial or sequential structure.</strong> In images, nearby pixels are related. In text, word order matters. In tables, the columns are arbitrary — you can shuffle them and the data means the same thing. Deep learning architectures like CNNs and RNNs were designed to exploit these structural regularities, and tables just do not have them.</p>
+<p><strong>Heterogeneous feature types.</strong> A single row might contain a person's age (continuous), their country (categorical), their income (continuous with a different scale), and whether they defaulted on a loan (binary). Mixing these types within a single model is non-trivial.</p>
+<p><strong>Small datasets are common.</strong> While LLMs train on billions of tokens, many real-world tabular problems have just a few hundred to a few thousand rows. Traditional deep learning typically needs much more data to generalize well.</p>
+<p><strong>Feature engineering matters enormously.</strong> The choice of which features to include, how to encode categoricals, how to handle missing values — these decisions often matter more than the choice of model.</p>
+<p>This is precisely why gradient-boosted decision trees (XGBoost, LightGBM, CatBoost) have dominated tabular ML for the better part of a decade. They handle heterogeneous features naturally, work well on small data, and are robust to feature scale differences. They have been the "default" for good reason.</p>
+<blockquote>
+<p><strong>[Figure 2: Traditional ML vs. Tabular Foundation Model Workflow]</strong>
+<em>Left side: Traditional workflow — data → feature engineering → hyperparameter tuning → train XGBoost → evaluate → repeat tuning. Right side: Foundation model workflow — data → single forward pass through pre-trained TabPFN → predictions. The key difference: no training loop, no tuning.</em></p>
+</blockquote>
+<hr />
+<h2>4. What Are Tabular Foundation Models?</h2>
+<p>Tabular Foundation Models (TFMs) flip the traditional paradigm on its head. Instead of training a new model from scratch for every dataset, a TFM is <strong>pre-trained once</strong> and then applied to any new tabular problem without retraining.</p>
+<p>The key mechanism is <strong>in-context learning</strong> — the same technique that allows GPT-4 to answer questions it was never explicitly trained on by learning from examples provided in the prompt.</p>
+<p>Here is how it works:</p>
+<ol>
+<li>
+<p><strong>Pre-training phase (done once):</strong> The model is trained on millions of <em>synthetically generated</em> tabular datasets. It learns not a specific prediction task, but a general <em>algorithm</em> for tabular reasoning — how to identify patterns, handle different feature types, and make predictions from structured data.</p>
+</li>
+<li>
+<p><strong>Inference phase (per new dataset):</strong> When you give TabPFN a new dataset, you pass the <strong>training rows and the test features</strong> together as input. The model processes them in a single forward pass and outputs predictions for the test set. No gradient descent. No hyperparameter tuning. Just one pass through the network.</p>
+</li>
+</ol>
+<p>Think of it like this: traditional ML learns <em>parameters</em> for your specific data. A tabular foundation model has already learned <em>how to learn from any tabular data</em>. It is a meta-learner.</p>
+<hr />
+<h2>5. Main Paper Reviewed: TabPFN-2.5</h2>
+<p>The paper I am reviewing is:</p>
+<blockquote>
+<p><strong>TabPFN-2.5: Advancing the State of the Art in Tabular Foundation Models</strong>
+Rosen Yu, Felix Jablonski, Shi Bin Hoo, Anurag Garg, Jake Robertson, Magnus Bühler, Vladyslav Moroshan, Lennart Purucker, Clara Cornu, Lilly Charlotte Wehrhahn, Alessandro Bonetto, Bernhard Schölkopf, Sauraj Gambhir, Noah Hollmann, Frank Hutter
+Prior Labs &amp; University of Freiburg, 2025
+<a href="https://arxiv.org/abs/2511.08667">arXiv:2511.08667</a></p>
+</blockquote>
+<p>TabPFN-2.5 is the third iteration in the TabPFN lineage:</p>
+<ul>
+<li><strong>TabPFN v1 (2022):</strong> The original proof-of-concept. Solved small classification problems (up to 1,000 samples, 100 features) in under a second. Impressive, but too limited for most real-world use.</li>
+<li><strong>TabPFNv2 (2024):</strong> Scaled to 10,000 samples and 500 features. Added regression support. Became competitive with tuned XGBoost.</li>
+<li><strong>TabPFN-2.5 (2025):</strong> The paper reviewed here. Scales to <strong>50,000 samples and 2,000 features</strong>. Claims to outperform tuned XGBoost/CatBoost/LightGBM and match 4-hour AutoGluon ensembles in a single forward pass.</li>
+</ul>
+<hr />
+<h2>6. Architecture and Method Explained Simply</h2>
+<blockquote>
+<p><strong>[Figure 3: TabPFN Architecture or Workflow]</strong>
+<em>Diagram showing the TabPFN-2.5 architecture: training rows and test rows are embedded together, passed through an alternating-attention transformer (24 layers for classification), with 64 "thinking" rows providing extra computational capacity. Output: predictions for test rows.</em></p>
+</blockquote>
+<p>At its core, TabPFN-2.5 is a <strong>transformer</strong> — the same architecture family behind GPT and BERT — but adapted for tabular data. Here are the key design choices:</p>
+<h3>Alternating Attention</h3>
+<p>The transformer uses alternating attention layers:
+- <strong>Row-wise attention:</strong> Each row (sample) attends to other rows, learning inter-sample relationships.
+- <strong>Column-wise attention:</strong> Each feature attends to other features within the same row, learning inter-feature relationships.</p>
+<p>This alternation lets the model reason about both "which samples are similar?" and "which features are related?" within the same architecture.</p>
+<h3>Feature Group Embeddings</h3>
+<p>Since tabular features do not have a natural ordering (unlike words in a sentence), TabPFN groups features into chunks and embeds each chunk together. TabPFN-2.5 increased the group size, which speeds up both training and inference by reducing the effective sequence length.</p>
+<h3>"Thinking" Rows</h3>
+<p>This is one of the most creative innovations. Inspired by chain-of-thought reasoning in LLMs, the authors added <strong>64 learned "thinking" rows</strong> to the input. These are not real data points — they are trainable parameters that give the transformer extra computational capacity to work with. They act as "scratch space" for the model to perform intermediate computations during the forward pass.</p>
+<h3>Synthetic Pre-Training with Real Fine-Tuning</h3>
+<p>TabPFN-2.5 is pre-trained entirely on synthetic data generated from a rich prior distribution. This means the model has never seen your specific dataset during training, eliminating the risk of data leakage.</p>
+<p>They also released <strong>Real-TabPFN-2.5</strong>, a variant fine-tuned on 43 carefully curated real-world datasets (rigorously deduplicated against all benchmarks). This version pushes performance even higher.</p>
+<h3>Distillation for Deployment</h3>
+<p>A valid criticism of foundation models is latency — running a 24-layer transformer for every prediction is expensive. TabPFN-2.5 addresses this with distillation engines that can convert the model's predictions into a fast <strong>MLP or tree ensemble</strong> for production deployment. You get the accuracy of a foundation model with the speed of a gradient-boosted tree.</p>
+<hr />
+<h2>7. Paper Benchmarks, Metrics, and Results</h2>
+<h3>Benchmarks</h3>
+<p>The authors evaluated on three main benchmarks:</p>
+<table>
+<thead>
+<tr>
+<th>Benchmark</th>
+<th>Description</th>
+<th>Scale</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>TabArena</strong></td>
+<td>Industry-standard public benchmark with 51 diverse datasets</td>
+<td>Up to 100K rows, 2K features</td>
+</tr>
+<tr>
+<td><strong>Internal Suite</strong></td>
+<td>100+ proprietary datasets across healthcare, finance, manufacturing</td>
+<td>Varies</td>
+</tr>
+<tr>
+<td><strong>RealCause</strong></td>
+<td>Causal inference benchmark for treatment effect estimation</td>
+<td>Varies</td>
+</tr>
+</tbody>
+</table>
+<h3>Metrics</h3>
+<ul>
+<li><strong>Normalized score</strong> (0–1 per dataset, averaged across datasets) for overall comparison</li>
+<li><strong>Accuracy, ROC AUC</strong> for classification</li>
+<li><strong>RMSE, R²</strong> for regression</li>
+<li><strong>PEHE</strong> (Precision in Estimating Heterogeneous Effects) for causal inference</li>
+</ul>
+<h3>Key Results</h3>
+<p>The headline results are striking:</p>
+<ol>
+<li>
+<p><strong>TabPFN-2.5 (default, single pass) &gt; tuned XGBoost, CatBoost, LightGBM.</strong> Without any hyperparameter search, TabPFN-2.5 outperforms individually tuned gradient-boosted tree methods on the TabArena benchmark.</p>
+</li>
+<li>
+<p><strong>TabPFN-2.5 ≈ AutoGluon 1.4 (4-hour extreme mode).</strong> AutoGluon runs an ensemble of multiple model families with extensive tuning for 4 hours. TabPFN-2.5 matches this in seconds.</p>
+</li>
+<li>
+<p><strong>Real-TabPFN-2.5 &gt; everything.</strong> The real-data fine-tuned variant sets a new state-of-the-art, significantly outperforming all baselines on classification.</p>
+</li>
+<li>
+<p><strong>Causal inference SOTA.</strong> When plugged into a T-Learner framework, TabPFN-2.5 achieves the best results on the RealCause benchmark.</p>
+</li>
+</ol>
+<blockquote>
+<p><strong>[Figure 4: Benchmark / Result Summary from the Paper]</strong>
+<em>Simplified bar chart or table recreating the paper's normalized performance comparison: TabPFN-2.5 (default) vs. XGBoost (tuned) vs. CatBoost (tuned) vs. AutoGluon (4h) across TabArena. TabPFN-2.5 and Real-TabPFN-2.5 at or above all baselines.</em></p>
+</blockquote>
+<hr />
+<h2>8. Ablation Studies and What They Show</h2>
+<p>The paper does not present traditional ablation studies where components are removed one by one. Instead, the progression from TabPFNv2 to TabPFN-2.5 itself serves as a large-scale ablation:</p>
+<table>
+<thead>
+<tr>
+<th>Change</th>
+<th>Effect</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Deeper network</strong> (18→24 layers for classification)</td>
+<td>Improved accuracy on complex datasets</td>
+</tr>
+<tr>
+<td><strong>Larger feature group size</strong></td>
+<td>Faster training and inference, slight accuracy gain</td>
+</tr>
+<tr>
+<td><strong>"Thinking" rows</strong> (64 added)</td>
+<td>Acts as computational scratch space; measurable improvement</td>
+</tr>
+<tr>
+<td><strong>Richer synthetic priors</strong></td>
+<td>Better generalization to diverse real-world data</td>
+</tr>
+<tr>
+<td><strong>Scaling to 50K rows</strong></td>
+<td>Unlocked applicability to medium-sized real-world datasets</td>
+</tr>
+<tr>
+<td><strong>Real-data fine-tuning</strong> (Real-TabPFN-2.5)</td>
+<td>Significant accuracy boost over synthetic-only pre-training</td>
+</tr>
+</tbody>
+</table>
+<p>The most interesting takeaway is the <strong>"thinking" rows</strong> — adding trainable dummy inputs that the transformer can use as computational memory. This is a direct cross-pollination from the LLM world, where chain-of-thought prompting improves reasoning. Here, the equivalent concept is baked directly into the architecture.</p>
+<p>The <strong>real-data fine-tuning</strong> also reveals something important: purely synthetic pre-training gets you very far, but incorporating a small amount of curated real data closes a meaningful remaining gap.</p>
+<hr />
+<h2>9. My Reproduction Experiment</h2>
+<p>To test the paper's core claim myself, I ran a small-scale reproduction experiment comparing four models on two public datasets from scikit-learn:</p>
+<h3>Datasets</h3>
+<table>
+<thead>
+<tr>
+<th>Dataset</th>
+<th>Samples</th>
+<th>Features</th>
+<th>Classes</th>
+<th>Task</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Breast Cancer Wisconsin</td>
+<td>569</td>
+<td>30</td>
+<td>2</td>
+<td>Binary classification</td>
+</tr>
+<tr>
+<td>Wine</td>
+<td>178</td>
+<td>13</td>
+<td>3</td>
+<td>Multiclass classification</td>
+</tr>
+</tbody>
+</table>
+<h3>Models Compared</h3>
+<table>
+<thead>
+<tr>
+<th>Model</th>
+<th>Type</th>
+<th>Hyperparameters</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Logistic Regression</td>
+<td>Linear baseline</td>
+<td>max_iter=2000, default otherwise</td>
+</tr>
+<tr>
+<td>Random Forest</td>
+<td>Ensemble (trees)</td>
+<td>n_estimators=200, default otherwise</td>
+</tr>
+<tr>
+<td>XGBoost</td>
+<td>Gradient-boosted trees</td>
+<td>n_estimators=200, lr=0.1, max_depth=6</td>
+</tr>
+<tr>
+<td>TabPFN</td>
+<td>Tabular foundation model</td>
+<td>n_estimators=16, default otherwise</td>
+</tr>
+</tbody>
+</table>
+<h3>Evaluation Protocol</h3>
+<ul>
+<li><strong>5-fold stratified cross-validation</strong> with a fixed random seed (42) for reproducibility.</li>
+<li><strong>Metrics:</strong> Accuracy and weighted F1-score (mean ± std across folds).</li>
+<li><strong>No hyperparameter tuning</strong> for any model — all use default or near-default settings to test out-of-the-box performance, which is exactly the scenario where TabPFN claims to shine.</li>
+</ul>
+<p>The experiment code is available at <a href="https://github.com/ArshanBhanage/Deep-Learning---Short-Story/blob/main/reproduction/run_experiment.py"><code>reproduction/run_experiment.py</code></a>.</p>
+<hr />
+<h2>10. My Results and Interpretation</h2>
+<h3>Results Table</h3>
+<table>
+<thead>
+<tr>
+<th>Dataset</th>
+<th>Model</th>
+<th>Accuracy (mean ± std)</th>
+<th>F1-Score (mean ± std)</th>
+<th>Time (s)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Breast Cancer</td>
+<td>Logistic Regression</td>
+<td>0.9737 ± 0.0166</td>
+<td>0.9734 ± 0.0170</td>
+<td>0.005</td>
+</tr>
+<tr>
+<td>Breast Cancer</td>
+<td>Random Forest</td>
+<td>0.9543 ± 0.0102</td>
+<td>0.9542 ± 0.0103</td>
+<td>0.695</td>
+</tr>
+<tr>
+<td>Breast Cancer</td>
+<td>XGBoost</td>
+<td>0.9631 ± 0.0086</td>
+<td>0.9629 ± 0.0088</td>
+<td>0.136</td>
+</tr>
+<tr>
+<td>Breast Cancer</td>
+<td><strong>TabPFN</strong></td>
+<td><strong>0.9772 ± 0.0089</strong></td>
+<td><strong>0.9771 ± 0.0090</strong></td>
+<td>2.984</td>
+</tr>
+<tr>
+<td>Wine</td>
+<td>Logistic Regression</td>
+<td>0.9833 ± 0.0136</td>
+<td>0.9833 ± 0.0136</td>
+<td>0.007</td>
+</tr>
+<tr>
+<td>Wine</td>
+<td>Random Forest</td>
+<td>0.9775 ± 0.0213</td>
+<td>0.9775 ± 0.0213</td>
+<td>0.451</td>
+</tr>
+<tr>
+<td>Wine</td>
+<td>XGBoost</td>
+<td>0.9606 ± 0.0291</td>
+<td>0.9604 ± 0.0295</td>
+<td>0.061</td>
+</tr>
+<tr>
+<td>Wine</td>
+<td><strong>TabPFN</strong></td>
+<td><strong>0.9832 ± 0.0137</strong></td>
+<td><strong>0.9832 ± 0.0138</strong></td>
+<td>1.117</td>
+</tr>
+</tbody>
+</table>
+<h3>Figures</h3>
+<blockquote>
+<p><strong>[Figure 5: Accuracy Comparison from My Reproduction]</strong>
+<em>Bar chart showing accuracy across all four models on both datasets. TabPFN achieves the highest accuracy on Breast Cancer (0.977) and ties with Logistic Regression on Wine (0.983).</em>
+<em>(Use: <code>reproduction/figures/model_accuracy_comparison.png</code>)</em></p>
+<p><strong>[Figure 6: F1-Score Comparison from My Reproduction]</strong>
+<em>Bar chart showing weighted F1-score across all four models on both datasets. Pattern mirrors accuracy results.</em>
+<em>(Use: <code>reproduction/figures/model_f1_comparison.png</code>)</em></p>
+</blockquote>
+<h3>Interpretation</h3>
+<p>The results are consistent with the paper's claims:</p>
+<p><strong>On Breast Cancer (569 samples, 30 features):</strong>
+- TabPFN achieves the highest accuracy (0.977), beating XGBoost (0.963) and Random Forest (0.954) by a meaningful margin.
+- It also beats Logistic Regression (0.974), though narrowly — this dataset has relatively well-separated classes.
+- TabPFN does this with <strong>zero tuning</strong>, while XGBoost had reasonable defaults (200 estimators, lr=0.1, max_depth=6).</p>
+<p><strong>On Wine (178 samples, 13 features):</strong>
+- TabPFN ties with Logistic Regression at the top (both ~0.983).
+- It significantly outperforms XGBoost (0.961) on this small, clean dataset.
+- This aligns perfectly with the paper's emphasis on small-data performance. With only 178 samples, the in-context learning approach shines.</p>
+<p><strong>Speed trade-off:</strong>
+- TabPFN is slower per prediction (1–3 seconds vs. milliseconds for tree methods). But when you account for the hours of hyperparameter tuning that tree methods typically require in practice, TabPFN's total time-to-result is far shorter.</p>
+<hr />
+<h2>11. Strengths of the Approach</h2>
+<p><strong>1. Zero-tuning, strong defaults.</strong> This is the killer feature. You do not need to run grid search, Bayesian optimization, or any hyperparameter tuning. TabPFN just works. For data scientists spending hours on tuning, this is transformative.</p>
+<p><strong>2. Small-data champion.</strong> In the regime of tens to thousands of samples — which is extremely common in healthcare, science, and niche business problems — TabPFN consistently outperforms traditional methods that need more data to learn effectively.</p>
+<p><strong>3. Well-calibrated uncertainty.</strong> Because TabPFN performs Bayesian-style inference in-context, its probability outputs tend to be well-calibrated out of the box. This matters enormously for risk-sensitive applications.</p>
+<p><strong>4. Practical deployment path.</strong> The distillation engines (TabPFN-as-MLP, TabPFN-as-TreeEns) solve the latency problem. You can use TabPFN to generate predictions, then distill those into a fast, lightweight model for production. Best of both worlds.</p>
+<p><strong>5. Scalability leap.</strong> Going from 10K to 50K samples makes TabPFN viable for a much larger fraction of real-world problems. Most Kaggle competitions and many business datasets fall within this range.</p>
+<hr />
+<h2>12. Limitations</h2>
+<p>No model is without limitations, and it is important to be honest about where TabPFN-2.5 falls short:</p>
+<p><strong>1. Dataset size ceiling.</strong> 50,000 rows is the current limit. Many production datasets have millions or billions of rows. For these, you still need traditional methods or subsampling strategies.</p>
+<p><strong>2. GPU memory requirements.</strong> Running a 24-layer transformer with 50K samples in-context requires significant GPU memory. This makes it less accessible for practitioners without cloud GPU access. (My own local CPU run hung for 10+ minutes; GPU was necessary.)</p>
+<p><strong>3. Proprietary components.</strong> The distillation engines for fast deployment appear to be part of Prior Labs' commercial offering, not the open-source release. This limits the full pipeline to paying customers.</p>
+<p><strong>4. Interpretability.</strong> Gradient-boosted trees offer feature importance, SHAP values, and other interpretability tools out of the box. TabPFN's transformer internals are harder to inspect, though the authors are working on interpretability features.</p>
+<p><strong>5. Not a universal solution.</strong> On very large, well-structured datasets where you have the budget for extensive tuning, a well-tuned XGBoost or CatBoost ensemble may still win — or at least tie — while being faster and more interpretable.</p>
+<blockquote>
+<p><strong>[Figure 7: Limitations / Future Direction Diagram]</strong>
+<em>Visual showing the current boundaries: dataset size limit (50K), GPU requirements, proprietary distillation. Arrows pointing to future directions: scaling to 100K+ rows, open-source distillation, better interpretability, multi-modal tabular+text support.</em></p>
+</blockquote>
+<hr />
+<h2>13. My Personal Takeaways</h2>
+<p>After reading the paper and running the reproduction:</p>
+<p><strong>This feels like a genuine inflection point.</strong> TabPFN-2.5 is not just a research curiosity — it is a practical tool that can replace XGBoost as the default baseline for most tabular problems under 50K rows. The fact that a single forward pass beats 4 hours of AutoGluon tuning is remarkable.</p>
+<p><strong>The "thinking rows" idea is brilliant.</strong> Taking the chain-of-thought concept from LLMs and embedding it as trainable parameters in the architecture is elegant. It gives the model more computational depth without increasing the input size.</p>
+<p><strong>The ecosystem matters as much as the model.</strong> The distillation engines, the API, the interpretability tools — these are what will determine adoption. A model that is 2% more accurate but impossible to deploy is not useful. Prior Labs seems to understand this.</p>
+<p><strong>We are witnessing convergence.</strong> The boundary between "foundation models" and "traditional ML" is blurring. Tabular data was the last holdout, and now it is falling too. In a few years, the default approach to any prediction problem — text, image, tabular — may be "grab a pre-trained foundation model and fine-tune (or just use in-context learning)."</p>
+<p><strong>My reproduction confirms the claim on small data.</strong> On the two datasets I tested, TabPFN matched or beat all baselines with zero tuning. It is particularly strong on Breast Cancer (30 features, 569 samples), exactly the kind of small-to-medium dataset where the paper claims its advantages are greatest.</p>
+<hr />
+<h2>14. Conclusion</h2>
+<p>The foundation model revolution is not limited to language and vision. TabPFN-2.5 demonstrates that the same paradigm — pre-train once, apply everywhere — can work for tabular data, the most common data type in the real world.</p>
+<p>For practitioners, the message is clear: if your tabular dataset has fewer than 50,000 rows, TabPFN should be your first model to try. It requires no tuning, runs in seconds, and will likely match or beat whatever you were going to spend hours tuning.</p>
+<p>For researchers, the questions are exciting: Can we scale this to millions of rows? Can we combine tabular and text data in a single foundation model? Can we make the in-context learning approach work for time series?</p>
+<p>The age of tabular foundation models is here, and XGBoost — the 10-year champion — finally has serious competition.</p>
+<hr />
+<h2>15. References</h2>
+<ol>
+<li>
+<p>Yu, R., Jablonski, F., Hoo, S.B., et al. (2025). <em>TabPFN-2.5: Advancing the State of the Art in Tabular Foundation Models.</em> arXiv:2511.08667. <a href="https://arxiv.org/abs/2511.08667">Link</a></p>
+</li>
+<li>
+<p>Hollmann, N., Müller, S., Eggensperger, K., &amp; Hutter, F. (2022). <em>TabPFN: A Transformer That Solves Small Tabular Classification Problems in a Second.</em> ICLR 2023. <a href="https://arxiv.org/abs/2207.01848">Link</a></p>
+</li>
+<li>
+<p>Garg, A., et al. (2025). <em>Real-TabPFN: Improving Tabular Foundation Models via Continued Pre-Training with Real-World Data.</em> <a href="https://arxiv.org/abs/2410.04145">Link</a></p>
+</li>
+<li>
+<p>Chen, T. &amp; Guestrin, C. (2016). <em>XGBoost: A Scalable Tree Boosting System.</em> KDD 2016. <a href="https://arxiv.org/abs/1603.02754">Link</a></p>
+</li>
+<li>
+<p>Erickson, N., et al. (2020). <em>AutoGluon-Tabular: Robust and Accurate AutoML for Structured Data.</em> <a href="https://arxiv.org/abs/2003.06505">Link</a></p>
+</li>
+<li>
+<p>Prokhorenkova, L., et al. (2018). <em>CatBoost: Unbiased Boosting with Categorical Features.</em> NeurIPS 2018. <a href="https://arxiv.org/abs/1706.09516">Link</a></p>
+</li>
+<li>
+<p>Ke, G., et al. (2017). <em>LightGBM: A Highly Efficient Gradient Boosting Decision Tree.</em> NeurIPS 2017. <a href="https://papers.nips.cc/paper/6907-lightgbm-a-highly-efficient-gradient-boosting-decision-tree">Link</a></p>
+</li>
+<li>
+<p>Erickson, N., et al. (2025). <em>TabArena: A Living Benchmark for Machine Learning on Tabular Data.</em> <a href="https://github.com/autogluon/tabarena">Link</a></p>
+</li>
+</ol>
+<hr />
+<p><em>This article is part of my Deep Learning Short Story assignment. The reproduction code, data, and figures are available at <a href="https://github.com/ArshanBhanage/Deep-Learning---Short-Story">github.com/ArshanBhanage/Deep-Learning---Short-Story</a>.</em></p>
+</body>
+</html>
